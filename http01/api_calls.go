@@ -1,3 +1,6 @@
+/*
+This file provides the api functions for the http01 test.
+*/
 package http01
 
 import (
@@ -5,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -13,6 +17,7 @@ import (
 
 var JWToken string
 
+// Login logs in to hostAndPort and returns the JWT token.
 func Login(hostAndPort string) (string, error) {
 
 	type LoginResponse struct {
@@ -21,13 +26,13 @@ func Login(hostAndPort string) (string, error) {
 		Token string `json:"token"`
 	}
 
-	loginURL := fmt.Sprintf("http://%s/login", hostAndPort)
+	loginURL := fmt.Sprintf("http://%s/acme/login", hostAndPort)
 	loginData := []byte(`{"email":"admin@certs.com.ph", "password": "<PASSWORD>"}`)
 
 	bodyReader := bytes.NewReader(loginData)
 	req, err := http.NewRequest("POST", loginURL, bodyReader)
 	if err != nil {
-		fmt.Println("Error creating http request", err)
+		log.Println("Error creating http request", err)
 		return "", err
 	}
 	req.Header.Add("Content-Type", "application/json")
@@ -35,7 +40,7 @@ func Login(hostAndPort string) (string, error) {
 	client := http.DefaultClient
 	response, doErr := client.Do(req)
 	if doErr != nil {
-		fmt.Println("Error doing http request", doErr)
+		log.Println("Error doing http request", doErr)
 		return "", err
 	}
 	defer func(Body io.ReadCloser) {
@@ -46,7 +51,7 @@ func Login(hostAndPort string) (string, error) {
 
 	}(response.Body)
 	if response.StatusCode != 200 {
-		fmt.Println("Error response from http request", response.Status)
+		log.Println("Error response from http request", response.Status)
 		return "", err
 	}
 
@@ -58,18 +63,21 @@ func Login(hostAndPort string) (string, error) {
 	return loginResponse.Token, nil
 }
 
+// PutPair PUTS the authString and token pair to the clm_client
 func PutPair(hostAndPort string, authToken string, token string, authString string) error {
 	type PutPairResponse struct {
 		Status  int8   `json:"status"`
 		Message string `json:"message"`
 	}
-	putPairURL := fmt.Sprintf("http://%s/.well-known/acme-challenge/put-pair", hostAndPort)
+	log.Printf("%s token: %s", getFunctionName(), token)
+	log.Printf("%s authString: %s", getFunctionName(), authString)
+	putPairURL := fmt.Sprintf("http://%s/acme/.well-known/acme-challenge/put-pair", hostAndPort)
 	putPairData := []byte(fmt.Sprintf(`{"token":"%s","authstring":"%s"}`, token, authString))
 
 	bodyReader := bytes.NewReader(putPairData)
 	req, err := http.NewRequest(http.MethodPut, putPairURL, bodyReader)
 	if err != nil {
-		fmt.Println("Error creating http request", err)
+		log.Printf("%s:Error creating http request:%s\n", getFunctionName(), err)
 		return err
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authToken))
@@ -77,7 +85,7 @@ func PutPair(hostAndPort string, authToken string, token string, authString stri
 	client := http.DefaultClient
 	response, doErr := client.Do(req)
 	if doErr != nil {
-		fmt.Println("Error doing http request", doErr)
+		log.Println("Error doing http request", doErr)
 		return err
 	}
 
@@ -104,19 +112,21 @@ func PutPair(hostAndPort string, authToken string, token string, authString stri
 	return nil
 }
 
+// GetAuthString retrieves the authString, given the token. We use this to check it is all well.
 func GetAuthString(host string, token string) (string, error) {
 	getAuthStringURL := fmt.Sprintf("http://%s/.well-known/acme-challenge/%s", host, token)
+	log.Printf("%s: GET '%s'\n", getFunctionName(), getAuthStringURL)
 
 	req, err := http.NewRequest(http.MethodGet, getAuthStringURL, nil)
 	if err != nil {
-		fmt.Println("Error creating http request", err)
+		log.Println("Error creating http request", err)
 		return "", err
 	}
 
 	client := http.DefaultClient
 	response, doErr := client.Do(req)
 	if doErr != nil {
-		fmt.Println("Error doing http request", doErr)
+		log.Println("Error doing http request", doErr)
 		return "", err
 	}
 
@@ -129,7 +139,7 @@ func GetAuthString(host string, token string) (string, error) {
 	}(response.Body)
 
 	if response.StatusCode != 200 {
-		fmt.Println("Error response from http request", response.Status)
+		log.Printf("%s: Error response from http request: %s\n", getFunctionName(), response.Status)
 		return "", err
 	}
 

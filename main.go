@@ -6,16 +6,18 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
+	"log"
+	"os"
+
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
-	"log"
-	"os"
 	"ph.certs.com/clm_acme/http01"
 )
 
-// You'll need a user or account type that implements acme.User
+// MyUser implements lego/v4/registration.User interface by defining methods to
+// retrieve the user's email address, registration, and private key.
 type MyUser struct {
 	Email        string
 	Registration *registration.Resource
@@ -25,7 +27,7 @@ type MyUser struct {
 func (u *MyUser) GetEmail() string {
 	return u.Email
 }
-func (u MyUser) GetRegistration() *registration.Resource {
+func (u *MyUser) GetRegistration() *registration.Resource {
 	return u.Registration
 }
 func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
@@ -44,12 +46,14 @@ func main() {
 		Email: "rolanpaulvc@gmail.com",
 		key:   privateKey,
 	}
-
+	// Configure the client.
 	config := lego.NewConfig(&myUser)
 
 	// This CA URL is configured for a local dev instance of Boulder running in Docker in a VM.
 	// config.CADirURL = "http://192.168.99.100:4000/directory"
 	///config.CADirURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+	// Set the ACME CA URL.
 	config.CADirURL = "https://acme-v02.api.letsencrypt.org/directory"
 	config.Certificate.KeyType = certcrypto.RSA2048
 
@@ -59,15 +63,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// We specify an HTTP port of 5002 and an TLS port of 5001 on all interfaces
-	// because we aren't running as root and can't bind a listener to port 80 and 443
-	// (used later when we attempt to pass challenges). Keep in mind that you still
-	// need to proxy challenge traffic to port 5002 and 5001.
-	//err = client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "5002"))
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-	http01Provider, err := http01.NewProviderHttp01RolanvcDev("rolanvc.dev", ":5001")
+	// We create an http01 challenge provider which has custom behavior.
+	http01Provider, err := http01.NewProviderHttp01RolanvcDev("rolanvc.dev", "")
 	if err != nil {
 		panic(err)
 	}
@@ -78,17 +75,24 @@ func main() {
 	//	log.Fatal(err)
 	//}
 
-	// New users will need to register
+	// Step 1.
+	// New users will need to register. This is where the process really starts. The above was
+	// really setup.
+	log.Println("Calling client.Registration.Register.")
 	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 	if err != nil {
 		log.Fatal(err)
 	}
 	myUser.Registration = reg
 
+	// Step 2.
+	log.Println("Calling certificate.ObtainRequest.")
 	request := certificate.ObtainRequest{
 		Domains: []string{"rolanvc.dev"},
 		Bundle:  true,
 	}
+	// Step 3.
+	log.Println("Retrieving certificate(s).")
 	certificates, err := client.Certificate.Obtain(request)
 	if err != nil {
 		log.Fatal(err)
@@ -96,25 +100,46 @@ func main() {
 
 	// Each certificate comes back with the cert bytes, the bytes of the client's
 	// private key, and a certificate URL. SAVE THESE TO DISK.
-	fmt.Printf("%#v\n", certificates)
+	log.Println("Received certificate. Saving component files to file.")
+	log.Println("Savin Private Key as {domain}-private_key.pem")
 	privateKeyFile := fmt.Sprintf("certs/%s-private_key.pem", certificates.Domain)
 	pkErr := os.WriteFile(privateKeyFile, certificates.PrivateKey, 0644)
 	if pkErr != nil {
-		fmt.Println(pkErr)
+		log.Printf("Error Saving File: %s", pkErr)
+	}
+	err = http01.IsValidPrivateKey(privateKeyFile)
+	if err != nil {
+		log.Printf("Error Validating Private Key: %s", err)
 		return
 	}
+
+	log.Println("Savin Certificate File as {domain}-cert.pem")
 	certFile := fmt.Sprintf("certs/%s-cert.pem", certificates.Domain)
 	certErr := os.WriteFile(certFile, certificates.Certificate, 0644)
 	if certErr != nil {
-		fmt.Println(certErr)
+		log.Printf("Error Saving File: %s", certErr)
 		return
 	}
-	caCertFile := fmt.Sprintf("certs/%s-cacert.pem", certificates.Domain)
+	certDetails, err := http01.ExtractPemContents(certFile)
+	if err != nil {
+		log.Printf("Error Extracting Certificate Details: %s", err)
+	}
+	http01.PrintCertInfo(certDetails)
+
+	log.Println("Saving Isser's Certificate File as {domain}-ca_cert.pem")
+	caCertFile := fmt.Sprintf("certs/%s-ca_cert.pem", certificates.Domain)
 	CaCertErr := os.WriteFile(caCertFile, certificates.IssuerCertificate, 0644)
 	if CaCertErr != nil {
 		fmt.Println(CaCertErr)
 		return
 	}
+	caCertDetails, err := http01.ExtractPemContents(caCertFile)
+	if err != nil {
+		log.Printf("Error Extracting Certificate Details: %s", err)
+	}
+	http01.PrintCertInfo(caCertDetails)
+
+	log.Printf("Trying to upload Files...")
 
 	uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
 	if uploadErr != nil {
