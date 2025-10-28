@@ -56,7 +56,7 @@ func (p *ProviderHttp01RolanvcDev) Present(domain, token, keyAuth string) error 
 	if keyAuth != authStr01 {
 		return fmt.Errorf("KeyAuth does not match Auth String\n")
 	}
-	log.Printf("KeyAuth matches Auth String\n")
+	log.Printf("*** KeyAuth matches Auth String ***\n")
 	return nil
 
 }

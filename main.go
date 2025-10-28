@@ -34,27 +34,41 @@ func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
 	return u.key
 }
 
-func main() {
-
-	// Create a user. New accounts need an email and private key to start.
+func initUser(email string) (*MyUser, error) {
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to generate prvate key: %w", err)
+	}
+	return &MyUser{
+		Email: email,
+		key:   privateKey,
+	}, nil
+}
+
+func main() {
+	const AcmeEmailAcct = "rolanvc@certs.com.ph"
+	const AcmeDirGs = "https://emea.acme.atlas.globalsign.com/directory"
+	const AcmeDirLetsEncrypt = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	// Create a user. New accounts need an email and private key to start.
+
+	user, err := initUser(AcmeEmailAcct)
+	if err != nil {
+		log.Fatalf("Error creating user: %v", err)
+
 	}
 
-	myUser := MyUser{
-		Email: "rolanpaulvc@gmail.com",
-		key:   privateKey,
-	}
 	// Configure the client.
-	config := lego.NewConfig(&myUser)
+	config := lego.NewConfig(user)
 
 	// This CA URL is configured for a local dev instance of Boulder running in Docker in a VM.
 	// config.CADirURL = "http://192.168.99.100:4000/directory"
 	///config.CADirURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
 	// Set the ACME CA URL.
-	config.CADirURL = "https://acme-v02.api.letsencrypt.org/directory"
+	// The next line is for LetsEncrypt
+	// config.CADirURL =
+	// The next line is for GlobalSign
+	config.CADirURL = AcmeDirLetsEncrypt
 	config.Certificate.KeyType = certcrypto.RSA2048
 
 	// A client facilitates communication with the CA server.
@@ -83,7 +97,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	myUser.Registration = reg
+	user.Registration = reg
 
 	// Step 2.
 	log.Println("Calling certificate.ObtainRequest.")
@@ -101,7 +115,7 @@ func main() {
 	// Each certificate comes back with the cert bytes, the bytes of the client's
 	// private key, and a certificate URL. SAVE THESE TO DISK.
 	log.Println("Received certificate. Saving component files to file.")
-	log.Println("Savin Private Key as {domain}-private_key.pem")
+	log.Printf("Saving Private Key as certs/%s-private_key.pem", certificates.Domain)
 	privateKeyFile := fmt.Sprintf("certs/%s-private_key.pem", certificates.Domain)
 	pkErr := os.WriteFile(privateKeyFile, certificates.PrivateKey, 0644)
 	if pkErr != nil {
@@ -113,7 +127,7 @@ func main() {
 		return
 	}
 
-	log.Println("Savin Certificate File as {domain}-cert.pem")
+	log.Printf("Saving Certificate File as certs/%s-cert.pem\n", certificates.Domain)
 	certFile := fmt.Sprintf("certs/%s-cert.pem", certificates.Domain)
 	certErr := os.WriteFile(certFile, certificates.Certificate, 0644)
 	if certErr != nil {
@@ -126,7 +140,7 @@ func main() {
 	}
 	http01.PrintCertInfo(certDetails)
 
-	log.Println("Saving Isser's Certificate File as {domain}-ca_cert.pem")
+	log.Printf("Saving Isser's Certificate File as certs/%s-ca_cert.pem", certificates.Domain)
 	caCertFile := fmt.Sprintf("certs/%s-ca_cert.pem", certificates.Domain)
 	CaCertErr := os.WriteFile(caCertFile, certificates.IssuerCertificate, 0644)
 	if CaCertErr != nil {
@@ -141,17 +155,19 @@ func main() {
 
 	log.Printf("Trying to upload Files...")
 
-	uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
-	if uploadErr != nil {
-		return
-	}
-	uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, certFile)
-	if uploadErr != nil {
-		return
-	}
-	uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, caCertFile)
-	if uploadErr != nil {
-		return
-	}
+	/*
+		uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
+		if uploadErr != nil {
+			return
+		}
+		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, certFile)
+		if uploadErr != nil {
+			return
+		}
+		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, caCertFile)
+		if uploadErr != nil {
+			return
+		}
+	*/
 
 }
