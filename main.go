@@ -46,18 +46,24 @@ func initUser(email string) (*MyUser, error) {
 }
 
 func main() {
+	const GsApiKey = "097800373d35ad9a"
+	const GsSecret = "3d857f0945ea94ff4e99c71634de94b8f3ae78ed"
 	const AcmeEmailAcct = "rolanvc@certs.com.ph"
 	const AcmeDirGs = "https://emea.acme.atlas.globalsign.com/directory"
-	const AcmeDirLetsEncrypt = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	//const AcmeDirLetsEncrypt = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	const AcmeHmacKey = "Cp8CvFsCZGRESO83wuC7CrvAPA75XGVMVHRicKiI75KmcIz9H_6-OYXxsnzaRzkmtvxQRPL8cG2KDz4k5wZkkwmNBLBAavSWxMbL9QE0LRjn_Pb7UV1YYsKCtl0c-Sk_xELLrj31ypJmS_4YgCiI60LOEr6Ev5sALrcikD3v_II"
+	const AcmeKeyId = "097800373d35ad9a"
 	// Create a user. New accounts need an email and private key to start.
 
+	log.Println("Starting ACME account registration with EAB...")
+
+	// 1. Initialize ACME User
 	user, err := initUser(AcmeEmailAcct)
 	if err != nil {
 		log.Fatalf("Error creating user: %v", err)
-
 	}
 
-	// Configure the client.
+	// 2.Configure the client.
 	config := lego.NewConfig(user)
 
 	// This CA URL is configured for a local dev instance of Boulder running in Docker in a VM.
@@ -68,14 +74,28 @@ func main() {
 	// The next line is for LetsEncrypt
 	// config.CADirURL =
 	// The next line is for GlobalSign
-	config.CADirURL = AcmeDirLetsEncrypt
+	config.CADirURL = AcmeDirGs
 	config.Certificate.KeyType = certcrypto.RSA2048
 
-	// A client facilitates communication with the CA server.
+	// 4. Create the client.
 	client, err := lego.NewClient(config)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// 5.Register the account with EAB
+	log.Printf("Attempting to register account with EAB.")
+	eabOptions := registration.RegisterEABOptions{
+		TermsOfServiceAgreed: true,
+		Kid:                  AcmeKeyId,
+		HmacEncoded:          AcmeHmacKey,
+	}
+	reg, err := client.Registration.RegisterWithExternalAccountBinding(eabOptions)
+	if err != nil {
+		log.Fatal(err)
+	}
+	user.Registration = reg
+	log.Printf("Account Registered.")
 
 	// We create an http01 challenge provider which has custom behavior.
 	http01Provider, err := http01.NewProviderHttp01RolanvcDev("rolanvc.dev", "")
@@ -89,14 +109,13 @@ func main() {
 	//	log.Fatal(err)
 	//}
 
-	// Step 1.
-	// New users will need to register. This is where the process really starts. The above was
-	// really setup.
-	log.Println("Calling client.Registration.Register.")
-	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-	if err != nil {
-		log.Fatal(err)
-	}
+	/*
+		log.Println("Calling client.Registration.Register.")
+		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			log.Fatal(err)
+		}
+	*/
 	user.Registration = reg
 
 	// Step 2.
@@ -140,7 +159,7 @@ func main() {
 	}
 	http01.PrintCertInfo(certDetails)
 
-	log.Printf("Saving Isser's Certificate File as certs/%s-ca_cert.pem", certificates.Domain)
+	log.Printf("Saving Issuer's Certificate File as certs/%s-ca_cert.pem", certificates.Domain)
 	caCertFile := fmt.Sprintf("certs/%s-ca_cert.pem", certificates.Domain)
 	CaCertErr := os.WriteFile(caCertFile, certificates.IssuerCertificate, 0644)
 	if CaCertErr != nil {
