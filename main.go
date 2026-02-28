@@ -2,12 +2,17 @@ package main
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
+	"github.com/joho/godotenv"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
@@ -34,74 +39,122 @@ func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
 	return u.key
 }
 
-func main() {
-
-	// Create a user. New accounts need an email and private key to start.
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func initUser(email string) (*MyUser, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
-
-	myUser := MyUser{
-		Email: "rolanpaulvc@gmail.com",
+	return &MyUser{
+		Email: email,
 		key:   privateKey,
+	}, nil
+}
+
+func main() {
+	loadDotenvErr := godotenv.Load()
+	if loadDotenvErr != nil {
+		log.Fatal("Error loading .env file")
 	}
-	// Configure the client.
-	config := lego.NewConfig(&myUser)
 
-	// This CA URL is configured for a local dev instance of Boulder running in Docker in a VM.
-	// config.CADirURL = "http://192.168.99.100:4000/directory"
-	///config.CADirURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	AcmeDirGs := os.Getenv("ACME_DIR_GS")
+	//const AcmeDirLetsEncrypt = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
-	// Set the ACME CA URL.
-	config.CADirURL = "https://acme-v02.api.letsencrypt.org/directory"
+	// The two things below come from GS Atlas Portal ->API Credentials
+	// 02-11-26acmetest MAC and key.
+	AcmeHmacKey := os.Getenv("ACME_HMAC_KEY")
+	AcmeKeyId := os.Getenv("ACME_KEY_ID")
+	// Create a user. New accounts need an email and private key to start.
+
+	log.Println("* Starting ACME account registration with EAB...")
+
+	// 1. Initialize ACME User
+	AcmeEmailAcct := os.Getenv("ACME_EMAIL_ACCT")
+	user, err := initUser(AcmeEmailAcct)
+	if err != nil {
+		log.Fatalf("Error creating user: %v", err)
+	}
+
+	certPrivateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatalf("Error creating cert private key: %v", err)
+	}
+
+	// 2.Configure the client.
+	config := lego.NewConfig(user)
+
+	config.CADirURL = AcmeDirGs
 	config.Certificate.KeyType = certcrypto.RSA2048
 
-	// A client facilitates communication with the CA server.
+	// 4. Create the client.
 	client, err := lego.NewClient(config)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// We create an http01 challenge provider which has custom behavior.
-	http01Provider, err := http01.NewProviderHttp01RolanvcDev("rolanvc.dev", "")
-	if err != nil {
-		panic(err)
+	// 5.Register the account with EAB
+	log.Printf("** Attempting to register account with EAB.")
+	eabOptions := registration.RegisterEABOptions{
+		TermsOfServiceAgreed: true,
+		Kid:                  AcmeKeyId,
+		HmacEncoded:          AcmeHmacKey,
 	}
-	err = client.Challenge.SetHTTP01Provider(http01Provider)
-
-	//err = client.Challenge.SetTLSALPN01Provider(tlsalpn01.NewProviderServer("", ""))
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-
-	// Step 1.
-	// New users will need to register. This is where the process really starts. The above was
-	// really setup.
-	log.Println("Calling client.Registration.Register.")
-	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	reg, err := client.Registration.RegisterWithExternalAccountBinding(eabOptions)
 	if err != nil {
 		log.Fatal(err)
 	}
-	myUser.Registration = reg
+	user.Registration = reg
+	log.Printf("*** Account Registered.")
 
-	// Step 2.
-	log.Println("Calling certificate.ObtainRequest.")
-	request := certificate.ObtainRequest{
-		Domains: []string{"rolanvc.dev"},
-		Bundle:  true,
+	// 6. Prepare for the DNS Challenge.
+	cfConfig := cloudflare.NewDefaultConfig()
+	cfConfig.AuthToken = os.Getenv("CF_AUTH_TOKEN")
+	dnsProvider, err := cloudflare.NewDNSProviderConfig(cfConfig)
+	if err != nil {
+		log.Fatalf("Failed to create Cloudflare DNS provider: %v", err)
 	}
-	// Step 3.
-	log.Println("Retrieving certificate(s).")
+	err = client.Challenge.SetDNS01Provider(dnsProvider)
+	if err != nil {
+		log.Fatalf("Failed to set dns provider: %v", err)
+	}
+
+	// C. Use ObtainForCSRRequest instead of ObtainRequest
+	log.Println("***** Saving CSR.")
+	err = SaveCSRToFile("test.rolanvc.dev", certPrivateKey, "certs/test.rolanvc.dev.csr")
+	if err != nil {
+		log.Printf("Error Saving CSR: %s", err)
+	}
+	log.Println("**** Calling certificate.ObtainRequest.")
+	request := certificate.ObtainRequest{
+		Domains:    []string{"test.rolanvc.dev"},
+		Bundle:     true,
+		PrivateKey: certPrivateKey,
+	}
+
+	// D. Use ObtainForCSR instead of Obtain
+	log.Println("****** calling certificate.Obtain.")
 	certificates, err := client.Certificate.Obtain(request)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// The above replaces the below.
+	// Step 2.
+	//log.Println("**** Calling certificate.ObtainRequest.")
+	//request := certificate.ObtainRequest{
+	//	Domains: []string{"rolanvc.dev"},
+	//	Bundle:  true,
+	//}
+	//// Step 3.
+	//log.Println("***** Retrieving certificate(s).")
+	//certificates, err := client.Certificate.Obtain(request)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+
 	// Each certificate comes back with the cert bytes, the bytes of the client's
 	// private key, and a certificate URL. SAVE THESE TO DISK.
 	log.Println("Received certificate. Saving component files to file.")
-	log.Println("Savin Private Key as {domain}-private_key.pem")
+	log.Printf("Saving Private Key as certs/%s-private_key.pem", certificates.Domain)
 	privateKeyFile := fmt.Sprintf("certs/%s-private_key.pem", certificates.Domain)
 	pkErr := os.WriteFile(privateKeyFile, certificates.PrivateKey, 0644)
 	if pkErr != nil {
@@ -113,7 +166,7 @@ func main() {
 		return
 	}
 
-	log.Println("Savin Certificate File as {domain}-cert.pem")
+	log.Printf("Saving Certificate File as certs/%s-cert.pem\n", certificates.Domain)
 	certFile := fmt.Sprintf("certs/%s-cert.pem", certificates.Domain)
 	certErr := os.WriteFile(certFile, certificates.Certificate, 0644)
 	if certErr != nil {
@@ -126,7 +179,7 @@ func main() {
 	}
 	http01.PrintCertInfo(certDetails)
 
-	log.Println("Saving Isser's Certificate File as {domain}-ca_cert.pem")
+	log.Printf("Saving Issuer's Certificate File as certs/%s-ca_cert.pem", certificates.Domain)
 	caCertFile := fmt.Sprintf("certs/%s-ca_cert.pem", certificates.Domain)
 	CaCertErr := os.WriteFile(caCertFile, certificates.IssuerCertificate, 0644)
 	if CaCertErr != nil {
@@ -141,17 +194,53 @@ func main() {
 
 	log.Printf("Trying to upload Files...")
 
-	uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
-	if uploadErr != nil {
-		return
-	}
-	uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, certFile)
-	if uploadErr != nil {
-		return
-	}
-	uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, caCertFile)
-	if uploadErr != nil {
-		return
+	/*
+		uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
+		if uploadErr != nil {
+			return
+		}
+		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, certFile)
+		if uploadErr != nil {
+			return
+		}
+		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, caCertFile)
+		if uploadErr != nil {
+			return
+		}
+	*/
+
+}
+
+// SaveCSRToFile generates a CSR based on the provided domain and private key,
+// then saves it to a .csr file for manual inspection.
+func SaveCSRToFile(domain string, privateKey crypto.PrivateKey, filePath string) error {
+	// 1. Create the CSR Template
+	// This mimics the basic structure Lego uses
+	template := x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: domain,
+		},
+		DNSNames: []string{domain},
 	}
 
+	// 2. Generate the CSR bytes
+	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &template, privateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create CSR: %w", err)
+	}
+
+	// 3. PEM encode the CSR
+	pemBlock := &pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: csrBytes,
+	}
+
+	// 4. Write to disk
+	err = os.WriteFile(filePath, pem.EncodeToMemory(pemBlock), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write CSR to file: %w", err)
+	}
+
+	fmt.Printf("Successfully saved CSR to: %s\n", filePath)
+	return nil
 }
