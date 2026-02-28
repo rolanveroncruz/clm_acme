@@ -154,8 +154,16 @@ func main() {
 	// Each certificate comes back with the cert bytes, the bytes of the client's
 	// private key, and a certificate URL. SAVE THESE TO DISK.
 	log.Println("Received certificate. Saving component files to file.")
-	log.Printf("Saving Private Key as certs/%s-private_key.pem", certificates.Domain)
-	privateKeyFile := fmt.Sprintf("certs/%s-private_key.pem", certificates.Domain)
+	saveFolder := "./certs"
+	log.Printf("Creating Directory:%s", saveFolder)
+	err = os.MkdirAll(saveFolder, 0755)
+	if err != nil {
+		log.Printf("Error Creating Directory: %s", err)
+		return
+	}
+
+	log.Printf("Saving Private Key as %s/%s-private_key.pem", saveFolder, certificates.Domain)
+	privateKeyFile := fmt.Sprintf("%s/%s-private_key.pem", saveFolder, certificates.Domain)
 	pkErr := os.WriteFile(privateKeyFile, certificates.PrivateKey, 0644)
 	if pkErr != nil {
 		log.Printf("Error Saving File: %s", pkErr)
@@ -166,8 +174,8 @@ func main() {
 		return
 	}
 
-	log.Printf("Saving Certificate File as certs/%s-cert.pem\n", certificates.Domain)
-	certFile := fmt.Sprintf("certs/%s-cert.pem", certificates.Domain)
+	log.Printf("Saving Certificate File as %s/%s-cert.pem\n", saveFolder, certificates.Domain)
+	certFile := fmt.Sprintf("%s/%s-cert.pem", saveFolder, certificates.Domain)
 	certErr := os.WriteFile(certFile, certificates.Certificate, 0644)
 	if certErr != nil {
 		log.Printf("Error Saving File: %s", certErr)
@@ -179,8 +187,8 @@ func main() {
 	}
 	http01.PrintCertInfo(certDetails)
 
-	log.Printf("Saving Issuer's Certificate File as certs/%s-ca_cert.pem", certificates.Domain)
-	caCertFile := fmt.Sprintf("certs/%s-ca_cert.pem", certificates.Domain)
+	log.Printf("Saving Issuer's Certificate File as %s /%s-ca_cert.pem", saveFolder, certificates.Domain)
+	caCertFile := fmt.Sprintf("%s/%s-ca_cert.pem", saveFolder, certificates.Domain)
 	CaCertErr := os.WriteFile(caCertFile, certificates.IssuerCertificate, 0644)
 	if CaCertErr != nil {
 		fmt.Println(CaCertErr)
@@ -191,23 +199,7 @@ func main() {
 		log.Printf("Error Extracting Certificate Details: %s", err)
 	}
 	http01.PrintCertInfo(caCertDetails)
-
-	log.Printf("Trying to upload Files...")
-
-	/*
-		uploadErr := http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, privateKeyFile)
-		if uploadErr != nil {
-			return
-		}
-		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, certFile)
-		if uploadErr != nil {
-			return
-		}
-		uploadErr = http01.UploadFileToClient(http01Provider.Host+http01Provider.Port, caCertFile)
-		if uploadErr != nil {
-			return
-		}
-	*/
+	log.Printf("Done.\n")
 
 }
 
